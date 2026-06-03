@@ -1,5 +1,4 @@
-# clipforge-backend
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import groq
@@ -23,18 +22,37 @@ groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
 def root():
     return {"status": "ClipForge backend running"}
 
+@app.post("/analyze-url")
+async def analyze_url(url: str = Form(...)):
+    job_id = str(uuid.uuid4())
+    tmp_dir = f"/tmp/{job_id}"
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    # Download YouTube video with yt-dlp
+    video_path = f"{tmp_dir}/input.mp4"
+    subprocess.run([
+        "yt-dlp",
+        "-f", "best[ext=mp4]/best",
+        "-o", video_path,
+        url
+    ], check=True)
+
+    return await process_video(video_path, tmp_dir)
+
 @app.post("/analyze")
 async def analyze_video(file: UploadFile = File(...)):
     job_id = str(uuid.uuid4())
     tmp_dir = f"/tmp/{job_id}"
     os.makedirs(tmp_dir, exist_ok=True)
 
-    # Save uploaded video
     video_path = f"{tmp_dir}/input.mp4"
     with open(video_path, "wb") as f:
         f.write(await file.read())
 
-    # Extract audio with FFmpeg
+    return await process_video(video_path, tmp_dir)
+
+async def process_video(video_path, tmp_dir):
+    # Extract audio
     audio_path = f"{tmp_dir}/audio.mp3"
     subprocess.run([
         "ffmpeg", "-i", video_path,
@@ -54,22 +72,22 @@ async def analyze_video(file: UploadFile = File(...)):
     transcript_text = transcription.text
     segments = transcription.segments
 
-    # Use Groq LLaMA to find best clips
-    prompt = f"""You are a viral content expert. Analyze this video transcript and find the 4 best moments to clip for TikTok/Reels/Shorts.
+    # Find best clips with LLaMA
+    prompt = f"""You are a viral content expert. Analyze this transcript and find the 4 best moments to clip for TikTok/Reels/Shorts.
 
 Transcript:
 {transcript_text}
 
-Segments with timestamps:
+Segments:
 {json.dumps(segments, indent=2)}
 
-Return ONLY a JSON array with exactly 4 clips. Each clip must have:
-- title: catchy name for the clip
+Return ONLY a JSON array with exactly 4 clips. Each must have:
+- title: catchy clip name
 - start: start time in seconds (number)
 - end: end time in seconds (number)
-- score: viral potential score 1-100 (number)
-- reason: why this clip will perform well
-- transcript: the exact words spoken in this clip
+- score: viral score 1-100 (number)
+- reason: why this will perform well
+- transcript: exact words in this clip
 
 Return only the JSON array, no other text."""
 
@@ -84,6 +102,7 @@ Return only the JSON array, no other text."""
     clips = json.loads(clips_raw)
 
     # Cut clips with FFmpeg
+    job_id = os.path.basename(tmp_dir)
     output_clips = []
     for i, clip in enumerate(clips):
         out_path = f"{tmp_dir}/clip_{i}.mp4"
