@@ -1,14 +1,12 @@
 # clipforge-backend
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import groq
-import anthropic
 import subprocess
 import os
 import json
 import uuid
-import tempfile
 
 app = FastAPI()
 
@@ -20,7 +18,6 @@ app.add_middleware(
 )
 
 groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
-claude_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 @app.get("/")
 def root():
@@ -57,7 +54,7 @@ async def analyze_video(file: UploadFile = File(...)):
     transcript_text = transcription.text
     segments = transcription.segments
 
-    # Ask Claude to find best clips
+    # Use Groq LLaMA to find best clips
     prompt = f"""You are a viral content expert. Analyze this video transcript and find the 4 best moments to clip for TikTok/Reels/Shorts.
 
 Transcript:
@@ -69,20 +66,20 @@ Segments with timestamps:
 Return ONLY a JSON array with exactly 4 clips. Each clip must have:
 - title: catchy name for the clip
 - start: start time in seconds (number)
-- end: end time in seconds (number)  
+- end: end time in seconds (number)
 - score: viral potential score 1-100 (number)
 - reason: why this clip will perform well
 - transcript: the exact words spoken in this clip
 
 Return only the JSON array, no other text."""
 
-    message = claude_client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        messages=[{"role": "user", "content": prompt}]
+    response = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1000
     )
 
-    clips_raw = message.content[0].text.strip()
+    clips_raw = response.choices[0].message.content.strip()
     clips_raw = clips_raw.replace("```json", "").replace("```", "").strip()
     clips = json.loads(clips_raw)
 
